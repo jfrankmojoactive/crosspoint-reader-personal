@@ -1,7 +1,11 @@
 # CrossPoint Reader Development Guide
 
-Project: Open-source e-reader firmware for Xteink X4 (ESP32-C3)
+Project: Open-source e-reader firmware for ESP32-based e-ink readers — Xteink X3/X4 (ESP32-C3) and
+Seeed Sticky (ESP32-S3), with the SDK/HAL boundary keeping the reader core portable (see SCOPE.md).
 Mission: Provide a lightweight, high-performance reading experience focused on EPUB rendering on constrained hardware.
+
+**The ESP32-C3 is the tightest target and therefore sets the ceiling for everything.** Unless a
+constraint is explicitly marked otherwise, assume the C3 numbers below.
 
 ## AI Agent Identity and Cognitive Rules
 * Role: Senior Embedded Systems Engineer (ESP-IDF/Arduino-ESP32 specialized).
@@ -30,24 +34,35 @@ uname -s
 - **Windows (Git Bash)**: Unix commands, `C:\` paths in Windows but `/` in bash, limited glob (use `find`+`xargs`)
 - **Linux/WSL**: Full bash, Unix paths, native glob support
 
-**Cross-Platform Code Formatting**:
+**Cross-Platform Code Formatting** — use the repo helper on every platform; it handles the
+generated-file exclusions and the clang-format 21+ check for you:
 ```bash
-find src -name "*.cpp" -o -name "*.h" | xargs clang-format -i
+./bin/clang-format-fix        # all tracked C/C++ files
+./bin/clang-format-fix -g     # only files modified in git status
 ```
+Windows PowerShell: `bin/clang-format-fix.ps1`
 
 ---
 
 ## Platform and Hardware Constraints
 
-### Hardware Specs
+### Hardware Specs (Xteink X3/X4 — the constraining target)
 * MCU: ESP32-C3 (Single-core RISC-V @ 160MHz)
 * RAM: ~380KB usable (VERY LIMITED - primary project constraint)
   * **NO PSRAM**: ESP32-C3 has no PSRAM capability (unlike ESP32-S3)
   * **Single Buffer Mode**: Only ONE 48KB framebuffer (not double-buffered)
-* Flash: 16MB (Instruction storage and static data)
+* Flash: 16MB part, but the app partition is **6.25MB** (`app0` in `partitions.csv`, dual-OTA)
+  * The firmware already uses ~85% of it — mostly `.rodata` from builtin fonts and embedded HTML.
+    **Flash headroom is a real constraint, not a formality.** Check the `Flash:` line after every build.
 * Display: 800x480 E-Ink (Slow refresh, monochrome, 1-2s full update)
   * Framebuffer: 48,000 bytes (800 × 480 ÷ 8)
 * Storage: SD Card (Used for books and aggressive caching)
+
+### Other Targets
+* **Seeed Sticky** (`[env:sticky]`): ESP32-S3R8, 3.97" 800x480, GT911 touch. Different MCU family, so
+  it is a separate binary. PSRAM is intentionally left off — the 48KB framebuffer fits in DRAM.
+* X3 and X4 share **one** C3 binary: `FREEINK_DEVICE_X3` and `FREEINK_DEVICE_X4` are both defined in
+  every C3 env, with runtime detection via the SDK's `XteinkDetect`. Do not add per-model build envs.
 
 ### The Resource Protocol
 1. Stack Safety: Limit local function variables to < 256 bytes. The ESP32-C3 default stack is small; use std::unique_ptr or static pools for larger buffers.
@@ -88,11 +103,12 @@ find src -name "*.cpp" -o -name "*.h" | xargs clang-format -i
 ### Build Environment
 * **Standard**: C++20 (`-std=c++2a`). No Exceptions, No RTTI.
 * **Logging**: ALWAYS use `LOG_INF`, `LOG_DBG`, or `LOG_ERR` from `Logging.h`. Raw Serial output is deprecated.
-* **Environments** (in `platformio.ini`):
-  * `default`: Development (LOG_LEVEL=2, serial enabled)
-  * `gh_release`: Production (LOG_LEVEL=0)
-  * `gh_release_rc`: Release candidate (LOG_LEVEL=1)
-  * `slim`: Minimal build (no serial logging)
+* **Environments** (in `platformio.ini`) — verify flags in the file before relying on them:
+  * `default`: Development (ESP32-C3; LOG_LEVEL=2, serial enabled; version string carries branch + short SHA)
+  * `gh_release`: Production (ESP32-C3; LOG_LEVEL=1)
+  * `gh_release_rc`: Release candidate (ESP32-C3; LOG_LEVEL=1, `-rc+<hash>` suffix)
+  * `slim`: Minimal build (ESP32-C3; `-UENABLE_SERIAL_LOG`)
+  * `sticky`: Seeed Sticky (**ESP32-S3**, `board_build.mcu = esp32s3`; LOG_LEVEL=2)
 
 ### Critical Build Flags
 These flags in `platformio.ini` fundamentally affect firmware behavior:
@@ -120,7 +136,7 @@ These flags in `platformio.ini` fundamentally affect firmware behavior:
 - Only ONE framebuffer exists (not double-buffered)
 - Grayscale rendering requires temporary buffer allocation (`renderer.storeBwBuffer()`)
 - Must call `renderer.restoreBwBuffer()` to free temporary buffers
-- See [lib/GfxRenderer/GfxRenderer.cpp:439-440](../lib/GfxRenderer/GfxRenderer.cpp) for malloc usage
+- See [lib/GfxRenderer/GfxRenderer.cpp:2107-2119](../lib/GfxRenderer/GfxRenderer.cpp) (`storeBwBuffer`) for the chunked malloc pattern
 
 ### Directory Structure
 * lib/: Internal libraries (Epub engine, GfxRenderer, UITheme, I18n)
@@ -262,7 +278,7 @@ When a template is necessary, limit instantiations: use explicit template instan
 
 ### Error Handling Philosophy
 
-**Source**: [src/main.cpp:132-143](../src/main.cpp), [lib/GfxRenderer/GfxRenderer.cpp:10](../lib/GfxRenderer/GfxRenderer.cpp)
+**Source**: [src/main.cpp:150-160](../src/main.cpp) (`ESP.restart()` recovery), [lib/GfxRenderer/GfxRenderer.cpp:10](../lib/GfxRenderer/GfxRenderer.cpp)
 
 **Pattern Hierarchy**:
 1. **LOG_ERR + return false** (90%): `LOG_ERR("MOD", "Failed: %s", reason); return false;`
@@ -307,8 +323,8 @@ sdkApiThatTakesOwnership(buffer, bufferSize);  // SDK calls free() / delete[]
 
 **Examples in codebase**:
 - Memory utilities: [Memory.h](../lib/Memory/Memory.h) (`makeUniqueNoThrow`)
-- Cover image buffers: [HomeActivity.cpp:166](../src/activities/home/HomeActivity.cpp)
-- Bitmap rendering: [GfxRenderer.cpp:439-440](../lib/GfxRenderer/GfxRenderer.cpp)
+- Cover image buffers: [HomeActivity.cpp:140](../src/activities/home/HomeActivity.cpp)
+- Bitmap rendering: [GfxRenderer.cpp:1292-1293](../lib/GfxRenderer/GfxRenderer.cpp)
 
 ### Heap Allocation with `new`: Always Use `makeUniqueNoThrow`
 
@@ -355,7 +371,7 @@ sdkApiThatTakesOwnership(obj);  // SDK calls delete
 
 ### Logical Button Mapping
 
-**Source**: [src/MappedInputManager.cpp:20-55](../src/MappedInputManager.cpp)
+**Source**: [src/MappedInputManager.cpp:56-75](../src/MappedInputManager.cpp) (physical mapping), [src/MappedInputManager.cpp:20-54](../src/MappedInputManager.cpp) (orientation table)
 
 Constraint: Physical button positions are fixed on hardware, but their logical functions change based on user settings and screen orientation.
 
@@ -457,7 +473,7 @@ sharing state with the render task.
 
 ### Global Font Loading
 
-**Source**: [src/main.cpp:40-115](../src/main.cpp)
+**Source**: [src/main.cpp:46-109](../src/main.cpp)
 
 **All fonts are loaded as global static objects** at firmware startup:
 - Noto Serif: 12, 14, 16, 18pt (4 styles each: regular, bold, italic, bold-italic)
@@ -504,12 +520,38 @@ pio run -t upload
 # Build specific environment
 pio run -e gh_release
 
+# Both MCU families in ONE invocation (what CI does — see below)
+pio run -e default -e sticky
+
 # Clean build artifacts
 pio run -t clean
 
 # Upload filesystem data (if using SPIFFS/LittleFS)
 pio run -t uploadfs
 ```
+
+**The first build runs TWICE — this is expected, not a hang.** `custom_sdkconfig` in
+`platformio.ini` reclaims ~32-37KB of heap by rebuilding the Arduino core libs. So pass one builds
+against the stock core, prints `*** Copied compiled esp32c3 IDF libraries to Arduino framework ***`,
+and then the whole app rebuilds against the custom libs. Only the **second** set of RAM/Flash numbers
+describes the real firmware; the first pass reports the scaffold build and is much smaller. Expect
+several minutes on a cold cache, seconds afterwards.
+
+If an interrupted core rebuild leaves a stale scaffold (`multiple definition of 'app_main'`), clean
+it per the comment in `platformio.ini`:
+
+```bash
+rm -rf .dummy CMakeLists.txt sdkconfig.default sdkconfig.defaults .pio/build/default
+# Do NOT use `git clean -fdX` — it deletes platformio.local.ini
+```
+
+**Never run two separate `pio run` invocations for the two MCU families.** A second `pio run` can
+wipe the whole `.pio/build` tree on a project-checksum mismatch after the S3 toolchain installs,
+deleting the `default` `firmware.bin` — the reason `ci.yml` builds both envs in a single command.
+
+**Build outputs** (`.pio/build/<env>/`): `firmware.bin` is the flashable app, written at offset
+`0x10000` — it is what https://crosspointreader.com/#flash-tools takes as a "Custom .bin", and what
+the on-device SD firmware update flow reads.
 
 **Via VS Code**:
 * Use PlatformIO toolbar: Build (✓), Upload (→), Clean (🗑️)
@@ -626,6 +668,23 @@ with `git config core.hooksPath .githooks`.
 ---
 
 ## Git Workflow and Repository Awareness
+
+### This Repository (crosspoint-reader-personal)
+
+This is a **personal fork** for one owner's device, not the upstream project:
+
+- **One remote**: `origin` → `jfrankmojoactive/crosspoint-reader-personal`. There is no `upstream`
+  remote configured; add one explicitly if you need to sync from
+  `crosspoint-reader/crosspoint-reader`.
+- **Base branch is `develop`** — there is no `master` or `main` here. Branch from `develop` and
+  target it when merging.
+- **CI does not run on push.** `ci.yml`'s push trigger is `branches: [master]`, which does not exist
+  in this fork, so `clang-format`/`cppcheck`/`unit-tests`/`build` only run via **pull request**.
+  On a branch with no PR, the local checks in "Testing and Verification Workflow" are the only gate —
+  run them yourself rather than waiting for CI to catch anything.
+- **Personal features may sit outside upstream SCOPE.md.** That is fine here, but keep such work in
+  self-contained activities/libs so upstream merges stay clean, and do not weaken the C3 memory
+  and flash constraints to accommodate them — those are hardware limits, not project policy.
 
 ### Repository Detection Protocol
 
@@ -791,7 +850,7 @@ renderer.drawText(FONT_UI, x, y, tr(STR_LOADING), true);
 **To add custom fonts**:
 1. Place source fonts in `lib/EpdFont/fontsrc/` (gitignored)
 2. Run conversion script (see `lib/EpdFont/README`)
-3. Update global font objects in `src/main.cpp:40-115`
+3. Update global font objects in `src/main.cpp:46-109`
 4. Add font ID constant to `src/fontIds.h`
 
 ---
