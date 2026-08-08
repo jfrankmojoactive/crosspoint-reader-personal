@@ -402,53 +402,58 @@ Constraint: Physical button positions are fixed on hardware, but their logical f
 
 ### Activity Lifecycle and Memory Management
 
-**Source**: [src/main.cpp:132-143](../src/main.cpp)
+**Source**: [src/activities/ActivityManager.h](../src/activities/ActivityManager.h), [src/activities/Activity.h](../src/activities/Activity.h)
+**Full background**: [docs/activity-manager.md](../docs/activity-manager.md)
 
-**CRITICAL**: Activities are **heap-allocated** and **deleted on exit**.
+**CRITICAL**: `ActivityManager` owns every activity as a `std::unique_ptr<Activity>` on an
+activity **stack**. Do NOT write raw `new`/`delete` navigation, and do NOT give an activity its
+own render task — both patterns were removed in the ActivityManager refactor.
 
 ```cpp
-// main.cpp navigation pattern
-void exitActivity() {
-  if (currentActivity) {
-    currentActivity->onExit();
-    delete currentActivity;  // Activity deleted here!
-    currentActivity = nullptr;
-  }
-}
+// Navigation: typed helpers on the manager (see ActivityManager.h)
+activityManager.goHome();
+activityManager.goToReader(path);
+activityManager.replaceActivity(std::move(next));  // swap current
+activityManager.pushActivity(std::move(child));    // stack a subactivity
+activityManager.popActivity();                     // goHome() if the stack empties
 
-void enterNewActivity(Activity* activity) {
-  currentActivity = activity;  // Heap-allocated activity
-  currentActivity->onEnter();
-}
+// Subactivity results: no stored callbacks in the parent
+startActivityForResult(std::move(child), resultHandler);  // Activity.h:55
+setResult(std::move(result));                             // in the child
+finish();                                                 // pops the child
 ```
 
 **Memory Implications**:
-- Activity navigation = `delete` old activity + `new` create next activity
-- Any memory allocated in `onEnter()` MUST be freed in `onExit()`
-- FreeRTOS tasks MUST be deleted in `onExit()` before activity destruction
+- The activity is destroyed when it is popped/replaced — anything allocated in `onEnter()` MUST be freed in `onExit()`
 - Member `FsFile` handles MUST be closed in `onExit()` (local `FsFile` variables auto-close via destructor)
+- Any FreeRTOS task an activity creates for its *own* work MUST be `vTaskDelete()`d in `onExit()`, before destruction
 
 **Activity Pattern**:
 ```cpp
-void onEnter()  { Activity::onEnter(); /* alloc: buffer, tasks */ render(); }
-void loop()     { mappedInput.update(); /* handle input */ }
-void onExit()   { /* free: vTaskDelete, free buffer, close member FsFiles */ Activity::onExit(); }
+void onEnter()          { Activity::onEnter(); /* alloc buffers */ requestUpdate(); }
+void loop()             { mappedInput.update(); /* handle input */ }
+void render(RenderLock&&) { /* draw — called on the shared render task */ }
+void onExit()           { /* free buffers, close member FsFiles */ Activity::onExit(); }
 ```
 
-**Critical**: Free resources in reverse order. Delete tasks BEFORE activity destruction.
+**Critical**: Free resources in reverse order.
 
 ### FreeRTOS Task Guidelines
 
-**Source**: [src/activities/util/KeyboardEntryActivity.cpp:45-50](../src/activities/util/KeyboardEntryActivity.cpp)
+**Source**: [src/activities/ActivityManager.cpp:30](../src/activities/ActivityManager.cpp)
 
-**Pattern**: See Activity Lifecycle above. `xTaskCreate(&taskTrampoline, "Name", stackSize, this, 1, &handle)`
+There is exactly **one shared render task** for all activities, created by `ActivityManager` with
+`xTaskCreatePinnedToCore(&renderTaskTrampoline, "ActivityManagerRender", 8192, ...)`. Activities do
+not create render tasks; they implement `render(RenderLock&&)` and call `requestUpdate()` /
+`requestUpdateAndWait()`. Rendering is serialized by the single global mutex behind `RenderLock`.
 
-**Stack Sizing** (in BYTES, not words):
-- **2048**: Simple rendering (most activities)
+**Stack Sizing** (in BYTES, not words) — for worker tasks an activity genuinely needs:
+- **2048**: Simple work
 - **4096**: Network, EPUB parsing
 - Monitor: `uxTaskGetStackHighWaterMark()` if crashes
 
-**Rules**: Always `vTaskDelete()` in `onExit()` before destruction. Use mutex if shared state.
+**Rules**: Any task you create, you `vTaskDelete()` in `onExit()` before destruction. Use a mutex if
+sharing state with the render task.
 
 ### Global Font Loading
 
@@ -525,18 +530,57 @@ pio run -t upload && pio device monitor
 
 **Via VS Code**: Click Monitor (🔌) button in PlatformIO toolbar
 
+### Unit Tests (host, no hardware required)
+
+**Source**: [test/README](../test/README), [scripts/register_unit_tests_target.py](../scripts/register_unit_tests_target.py)
+
+The gtest suites under `test/` build and run **on the host** via CMake/CTest — outside the
+PlatformIO/ESP-IDF toolchain. CI runs them as a required job that gates the firmware build
+(`.github/workflows/ci.yml`), so run them before handing off any change to parsing, serialization,
+text shaping, or credential code.
+
+```bash
+# All suites, through PlatformIO
+pio run -t unit-tests
+
+# Same thing directly (what the custom target shells out to)
+cmake -S test -B build/test -DCMAKE_BUILD_TYPE=Release
+cmake --build build/test
+ctest --test-dir build/test --output-on-failure -j
+
+# A single suite
+cmake --build build/test --target StreamingJsonParserTest
+build/test/streaming_json_parser/StreamingJsonParserTest --gtest_filter='*'
+
+# A single test case
+ctest --test-dir build/test -R StreamingJsonParser --output-on-failure
+```
+
+Google Test is fetched via CMake `FetchContent` on first configure (pinned in
+`test/CMakeLists.txt`), so the first run needs network. Suites live in one directory each under
+`test/` and are registered in `test/CMakeLists.txt` — add a new one there.
+
 ### Code Quality
 
 ```bash
-# Static analysis (cppcheck)
-pio check
+# Static analysis (cppcheck). CI fails on low/medium/high defects, so match it locally:
+pio check --fail-on-defect low --fail-on-defect medium --fail-on-defect high
 
-# Format code (clang-format) - Windows Git Bash
-find src -name "*.cpp" -o -name "*.h" | xargs clang-format -i
-
-# Format code (clang-format) - Linux
-clang-format -i src/**/*.cpp src/**/*.h
+# Format code — ALWAYS use the repo helper, on every platform
+./bin/clang-format-fix        # all tracked C/C++ files
+./bin/clang-format-fix -g     # only files modified in git status
 ```
+
+**Do NOT hand-roll a `find | xargs clang-format` command.** `bin/clang-format-fix` covers `lib/` as
+well as `src/`, and deliberately **excludes script-generated trees** that a naive glob would rewrite:
+`lib/EpdFont/builtinFonts/`, `lib/Epub/Epub/hyphenation/generated/`, `lib/uzlib/`,
+`lib/miniz/third_party/`.
+
+**clang-format 21+ is required** — the helper refuses older binaries because `.clang-format` depends
+on 21 behavior. CI runs `./bin/clang-format-fix` and fails on any resulting diff.
+
+`.githooks/pre-commit` runs the helper automatically and re-stages the files it formatted; enable it
+with `git config core.hooksPath .githooks`.
 
 ### Debugging Crashes
 
@@ -795,10 +839,11 @@ build_flags =
 
 **AI agent scope** (what you CAN verify):
 1. ✅ **Build**: `pio run -t clean && pio run` (0 errors/warnings)
-2. ✅ **Quality**: `pio check` + `find src -name "*.cpp" -o -name "*.h" | xargs clang-format -i`
-3. ✅ **Format**: Commit messages (`feat:`/`fix:`), no `.gitignore`-excluded files staged (e.g., `*.generated.h`, `.pio/`, `platformio.local.ini`)
-4. ✅ **CI**: Fix GitHub Actions failures before review
-5. ✅ **Code review**: Ensure orientation-aware logic is correct in all 4 modes by inspecting switch/case coverage
+2. ✅ **Unit tests**: `pio run -t unit-tests` — host gtest suites, no hardware needed, and a required CI job
+3. ✅ **Quality**: `pio check --fail-on-defect low --fail-on-defect medium --fail-on-defect high` + `./bin/clang-format-fix`
+4. ✅ **Format**: Commit messages (`feat:`/`fix:`), no `.gitignore`-excluded files staged (e.g., `*.generated.h`, `.pio/`, `platformio.local.ini`)
+5. ✅ **CI**: Fix GitHub Actions failures before review
+6. ✅ **Code review**: Ensure orientation-aware logic is correct in all 4 modes by inspecting switch/case coverage
 
 **Human tester scope** (flag these for the user):
 6. 🔲 **Device**: Test on hardware
@@ -810,17 +855,17 @@ build_flags =
 
 **GitHub Actions** run automatically on pull requests:
 
-| Workflow | File | Purpose |
-|----------|------|---------|
-| Build Check | `.github/workflows/ci.yml` | Verifies code compiles |
-| Format Check | `.github/workflows/pr-formatting-check.yml` | Validates clang-format |
-| Release Build | `.github/workflows/release.yml` | Production releases |
+| Workflow | File | Jobs |
+|----------|------|------|
+| CI (build) | `.github/workflows/ci.yml` | `clang-format` → `cppcheck` → `unit-tests` → `build` (uploads `firmware.bin`) |
+| Format Check | `.github/workflows/pr-formatting-check.yml` | Validates clang-format on PRs |
+| Release Build | `.github/workflows/release.yml` | Production releases (tag push) |
 | RC Build | `.github/workflows/release_candidate.yml` | Release candidates |
 
 **Rules**:
 - **Fix CI failures BEFORE** requesting review
-- CI runs on: Push to PR, PR updates
-- Format check fails → Run clang-format locally
+- The `build` job depends on `unit-tests` — a failing suite blocks the firmware build entirely
+- Format check fails → run `./bin/clang-format-fix` locally (clang-format 21+)
 - Build check fails → Fix compile errors
 
 ---
@@ -895,26 +940,36 @@ rm -rf /path/to/sd/.crosspoint/epub_<hash>/sections/
 
 **Source**: `lib/Epub/Epub/Section.cpp`, `lib/Epub/Epub/BookMetadataCache.cpp`
 
-**Current Versions** (as of docs/file-formats.md):
-- `book.bin`: **Version 7** (metadata structure)
-- `section.bin`: **Version 25** (layout structure)
+**Current Versions** — read them from the source, never from memory; they move often and
+`docs/file-formats.md` sometimes lags the code:
+- `book.bin`: `BOOK_CACHE_VERSION` in [lib/Epub/Epub/BookMetadataCache.cpp](../lib/Epub/Epub/BookMetadataCache.cpp)
+- `section.bin`: `SECTION_FILE_VERSION` in [lib/Epub/Epub/Section.cpp](../lib/Epub/Epub/Section.cpp)
+
+```bash
+grep -n "BOOK_CACHE_VERSION = " lib/Epub/Epub/BookMetadataCache.cpp
+grep -n "SECTION_FILE_VERSION = " lib/Epub/Epub/Section.cpp
+```
 
 **Version Increment Rules**:
 1. **ALWAYS increment version** BEFORE changing binary structure
 2. Version mismatch → Cache auto-invalidated and regenerated
 3. Document format changes in `docs/file-formats.md`
 
-**Example** (incrementing section format version):
-```cpp
-// lib/Epub/Epub/Section.cpp
-static constexpr uint8_t SECTION_FILE_VERSION = 26;  // Was 25, now 26
+**TRAP — the partial-build sentinel moves with the section version.**
+`SECTION_FILE_PARTIAL_VERSION` is *derived* from `SECTION_FILE_VERSION` and marks a section file
+that is still being built in the background. The two MUST change in lockstep — the sentinel IS the
+partial's identity, so a stale partial from an older layout must never be readable as a valid file
+of the new one. The derivation lives next to the constant:
 
-// Add new field to structure
-struct PageLine {
-  // ... existing fields ...
-  uint16_t newField;  // New field added
-};
+```cpp
+// lib/Epub/Epub/Section.cpp — keep this relationship intact when bumping
+constexpr uint8_t SECTION_FILE_VERSION = <N>;
+constexpr uint8_t SECTION_FILE_PARTIAL_VERSION = 0xFE - (SECTION_FILE_VERSION - 28);
 ```
+
+Bumping `SECTION_FILE_VERSION` while leaving the sentinel expression untouched is correct; replacing
+the sentinel with a hardcoded literal is not. Read the comment block above the constants before
+touching either.
 
 ---
 
