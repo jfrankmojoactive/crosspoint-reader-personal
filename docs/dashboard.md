@@ -21,7 +21,14 @@ Everything else is a few lines in the home menu, the settings list, and
 
 1. Publish a Markdown page at a **public HTTPS URL**. No credentials are stored
    on the device, so the URL itself is the secret — use an unguessable path.
-2. On the device: **Settings → Dashboard URL**, type the URL, confirm.
+2. Set the URL, either way:
+   - **Web**: browse to `http://<device-ip>/settings` and fill in **Dashboard
+     URL** under the *Dashboard* card, then Save. Easiest for a long URL.
+   - **Device**: **Settings → Dashboard URL**, type it on the keyboard.
+
+   A URL without a scheme is stored as `https://`. Anything that is not an
+   http(s) URL is rejected and the previous value is kept — note the web page
+   reports "saved" either way, so reload it to confirm what actually stuck.
 3. **Home → Dashboard**. It connects Wi-Fi if needed, fetches, and renders.
 
 Buttons: Back returns home, Confirm re-fetches, Up/Down page through a long

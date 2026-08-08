@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "CrossPointSettings.h"
+#include "DashboardStore.h"
 #include "KOReaderCredentialStore.h"
 #include "ReaderFontSizes.h"
 #include "activities/settings/SettingsActivity.h"
@@ -323,6 +324,15 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         SettingInfo::Enum(StrId::STR_OPDS_FILENAME_FORMAT, &CrossPointSettings::opdsFilenameFormat,
                           {StrId::STR_FMT_AUTHOR_TITLE, StrId::STR_FMT_TITLE_AUTHOR, StrId::STR_FMT_TITLE},
                           "opdsFilenameFormat"),
+
+        // --- Dashboard (web-only, uses DashboardStore) ---
+        // Categorised under STR_DASHBOARD rather than a device category, so it
+        // groups on the web Settings page without reaching the on-device list
+        // (which has no editor for SettingType::STRING). The device edits the
+        // same store through the Dashboard URL action.
+        SettingInfo::DynamicString(
+            StrId::STR_DASHBOARD_URL, [] { return DASHBOARD_STORE.getUrl(); },
+            [](const std::string& v) { DASHBOARD_STORE.setUrl(v); }, "dashboardUrl", StrId::STR_DASHBOARD),
 
         // --- KOReader Sync (web-only, uses KOReaderCredentialStore) ---
         SettingInfo::DynamicString(

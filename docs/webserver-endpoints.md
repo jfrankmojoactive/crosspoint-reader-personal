@@ -236,6 +236,13 @@ Types:
 
 The font-family setting includes SD-card font families when they are installed.
 
+Some `string` settings are backed by their own store rather than
+`CrossPointSettings`, and are grouped under their own category so they appear on
+the web page without reaching the on-device Settings screen (which has no string
+editor): the KOReader sync credentials, and `dashboardUrl` (see
+[dashboard.md](dashboard.md)). A `dashboardUrl` without a scheme is stored as
+`https://`; a value that is not an http(s) URL is rejected and left unchanged.
+
 ### `POST /api/settings`
 
 Applies a partial settings update from a JSON object.
