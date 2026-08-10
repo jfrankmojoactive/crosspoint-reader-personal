@@ -333,6 +333,10 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         SettingInfo::DynamicString(
             StrId::STR_DASHBOARD_URL, [] { return DASHBOARD_STORE.getUrl(); },
             [](const std::string& v) { DASHBOARD_STORE.setUrl(v); }, "dashboardUrl", StrId::STR_DASHBOARD),
+        SettingInfo::DynamicString(
+            StrId::STR_DASHBOARD_CLIENTS_URL, [] { return DASHBOARD_STORE.getClientsUrl(); },
+            [](const std::string& v) { DASHBOARD_STORE.setClientsUrl(v); }, "dashboardClientsUrl",
+            StrId::STR_DASHBOARD),
 
         // --- KOReader Sync (web-only, uses KOReaderCredentialStore) ---
         SettingInfo::DynamicString(

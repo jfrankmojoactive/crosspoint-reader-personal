@@ -142,15 +142,14 @@ void DashboardActivity::startFetch() {
   requestUpdate();
 }
 
-void DashboardActivity::fetchContent() {
-  const std::string& url = DASHBOARD_STORE.getUrl();
-  std::string body;
-  // One allocation covering a typical page: append-driven doubling would
-  // otherwise realloc-and-copy several times mid-fetch, fragmenting DRAM.
-  body.reserve(4096);
-  bool hitCap = false;
+bool DashboardActivity::appendDocument(const std::string& url, std::string& body, bool& hitCap) const {
+  if (url.empty()) return true;  // Optional document: nothing to fetch is not a failure
 
-  const bool ok = HttpDownloader::fetchUrl(url, [&body, &hitCap](const uint8_t* data, const size_t len) {
+  // Every document starts a screen, so a blank line before the next one keeps
+  // its first heading from being treated as a continuation of the previous.
+  if (!body.empty() && body.back() != '\n') body.push_back('\n');
+
+  return HttpDownloader::fetchUrl(url, [&body, &hitCap](const uint8_t* data, const size_t len) {
     const size_t room = DashboardActivity::MAX_CONTENT_BYTES - body.size();
     if (room == 0) {
       // Stop the transfer: the rest of the page can never be displayed.
@@ -160,6 +159,26 @@ void DashboardActivity::fetchContent() {
     body.append(reinterpret_cast<const char*>(data), std::min(len, room));
     return true;
   });
+}
+
+void DashboardActivity::fetchContent() {
+  const std::string& url = DASHBOARD_STORE.getUrl();
+  const std::string& clientsUrl = DASHBOARD_STORE.getClientsUrl();
+  std::string body;
+  // One allocation covering a typical page: append-driven doubling would
+  // otherwise realloc-and-copy several times mid-fetch, fragmenting DRAM.
+  body.reserve(4096);
+  bool hitCap = false;
+  clientsFetchFailed = false;
+
+  // Priorities first, then the client summaries: the reading order IS the
+  // screen order. A clients page that fails leaves the priorities usable, so
+  // only a failed priorities fetch counts as a failure worth falling back for.
+  const bool ok = appendDocument(url, body, hitCap);
+  if (ok && !hitCap && !clientsUrl.empty() && !appendDocument(clientsUrl, body, hitCap)) {
+    LOG_ERR("DASH", "Clients fetch failed: %s", clientsUrl.c_str());
+    clientsFetchFailed = true;
+  }
 
   // Aborting at the cap surfaces as a failed fetch, but the bytes we kept are
   // a perfectly good (if clipped) page.
@@ -252,6 +271,11 @@ size_t DashboardActivity::layoutPage(const size_t byteOffset, const bool draw, c
   while (pos < content.size()) {
     size_t next = pos;
     const DashboardBlock block = parseDashboardLine(lineAt(content, pos, next));
+
+    // A top-level heading opens a screen: '# Priorities' then '# Acme Corp'
+    // gives one screen per section without any page-break syntax. Only when it
+    // is not already first, or every screen would be a single heading.
+    if (block.type == DashboardBlockType::Heading1 && !firstOnPage) return pos;
 
     // Height first: a block that does not fit ends the page untouched.
     int blockHeight = 0;
@@ -407,6 +431,9 @@ void DashboardActivity::render(RenderLock&&) {
       note = tr(STR_DASHBOARD_OFFLINE);
     } else if (contentTruncated) {
       note = tr(STR_DASHBOARD_CLIPPED);
+    } else if (clientsFetchFailed) {
+      // The priorities screens are intact; say so rather than showing nothing.
+      note = tr(STR_DASHBOARD_CLIENTS_FAILED);
     }
     if (note[0] != '\0') {
       const int noteWidth = renderer.getTextWidth(SMALL_FONT_ID, note);

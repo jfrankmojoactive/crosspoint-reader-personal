@@ -4,18 +4,22 @@
 
 void DashboardStore::toJson(JsonDocument& doc) const {
   doc["url"] = url;
+  doc["clientsUrl"] = clientsUrl;
 }
 
 bool DashboardStore::fromJson(const JsonVariantConst doc) {
   if (!doc.is<JsonObjectConst>()) return false;
-  const char* stored = doc["url"] | "";
-  url.assign(stored);
+  url.assign(doc["url"] | "");
   if (url.size() > MAX_URL_LENGTH) url.clear();
+  // Absent in files written before the clients page existed: an empty string
+  // is the correct upgrade, so no resave is needed.
+  clientsUrl.assign(doc["clientsUrl"] | "");
+  if (clientsUrl.size() > MAX_URL_LENGTH) clientsUrl.clear();
   return true;
 }
 
-bool DashboardStore::setUrl(const std::string& newUrl) {
-  std::string candidate = newUrl;
+bool DashboardStore::normalise(const std::string& in, std::string& out) {
+  std::string candidate = in;
 
   // Trim: the web form and the on-device keyboard both make stray spaces easy.
   const size_t first = candidate.find_first_not_of(" \t");
@@ -35,12 +39,28 @@ bool DashboardStore::setUrl(const std::string& newUrl) {
     LOG_ERR("DASH", "URL too long: %u", static_cast<unsigned>(candidate.size()));
     return false;
   }
-  // Empty clears the configuration (the Dashboard screen then prompts to set one).
+  // Empty clears the field.
   if (!candidate.empty() && candidate.rfind("http://", 0) != 0 && candidate.rfind("https://", 0) != 0) {
     LOG_ERR("DASH", "URL must start with http:// or https://");
     return false;
   }
+
+  out = std::move(candidate);
+  return true;
+}
+
+bool DashboardStore::setUrl(const std::string& newUrl) {
+  std::string candidate;
+  if (!normalise(newUrl, candidate)) return false;
   if (candidate == url) return true;  // Avoid a needless SD write (SD erase cycles)
   url = std::move(candidate);
+  return saveToFile();
+}
+
+bool DashboardStore::setClientsUrl(const std::string& newUrl) {
+  std::string candidate;
+  if (!normalise(newUrl, candidate)) return false;
+  if (candidate == clientsUrl) return true;
+  clientsUrl = std::move(candidate);
   return saveToFile();
 }
