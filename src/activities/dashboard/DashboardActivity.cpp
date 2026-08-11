@@ -17,8 +17,19 @@
 
 namespace {
 
-constexpr int HEADING1_FONT = NOTOSANS_16_FONT_ID;
-constexpr int BODY_FONT = UI_12_FONT_ID;
+// Body/heading pairs per DashboardStore font-size index. A heading always reads
+// at least as large as its body text, and is drawn bold, so the largest size
+// still separates the two.
+struct FontPair {
+  int body;
+  int heading;
+};
+constexpr FontPair FONT_PAIRS[DashboardStore::FONT_SIZE_COUNT] = {
+    {UI_12_FONT_ID, NOTOSANS_16_FONT_ID},        // Small — the original pairing
+    {NOTOSANS_14_FONT_ID, NOTOSANS_18_FONT_ID},  // Medium (default)
+    {NOTOSANS_16_FONT_ID, NOTOSANS_18_FONT_ID},  // Large
+    {NOTOSANS_18_FONT_ID, NOTOSANS_18_FONT_ID},  // Extra Large
+};
 constexpr int BULLET_INDENT = 18;
 constexpr int KEY_VALUE_GAP = 12;
 
@@ -35,6 +46,12 @@ void DashboardActivity::onEnter() {
   Activity::onEnter();
 
   DASHBOARD_STORE.loadFromFile();
+
+  // Snapshot the configured size for this visit, after the load above: the
+  // layout maths must not change between paginate() and render().
+  const FontPair& fonts = FONT_PAIRS[DASHBOARD_STORE.getFontSize() % DashboardStore::FONT_SIZE_COUNT];
+  bodyFont = fonts.body;
+  headingFont = fonts.heading;
   if (!DASHBOARD_STORE.isConfigured()) {
     state = State::NoUrl;
     requestUpdate();
@@ -239,7 +256,10 @@ Rect DashboardActivity::getBodyRect() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true);
   const int top = safe.y + metrics.headerHeight + metrics.verticalSpacing;
-  return Rect{safe.x, top, safe.width, safe.y + safe.height - top};
+  // Inset the text the way every other content screen does: the bezel-safe area
+  // alone runs glyphs right up to the edges, which is unreadable on the X3.
+  const int pad = metrics.contentSidePadding;
+  return Rect{safe.x + pad, top, safe.width - 2 * pad, safe.y + safe.height - top};
 }
 
 void DashboardActivity::paginate() {
@@ -261,8 +281,8 @@ void DashboardActivity::paginate() {
 
 size_t DashboardActivity::layoutPage(const size_t byteOffset, const bool draw, const Rect body) const {
   const int bodyBottom = body.y + body.height;
-  const int bodyLineHeight = renderer.getLineHeight(BODY_FONT);
-  const int headingLineHeight = renderer.getLineHeight(HEADING1_FONT);
+  const int bodyLineHeight = renderer.getLineHeight(bodyFont);
+  const int headingLineHeight = renderer.getLineHeight(headingFont);
 
   int y = body.y;
   size_t pos = byteOffset;
@@ -279,7 +299,7 @@ size_t DashboardActivity::layoutPage(const size_t byteOffset, const bool draw, c
 
     // Height first: a block that does not fit ends the page untouched.
     int blockHeight = 0;
-    int fontId = BODY_FONT;
+    int fontId = bodyFont;
     EpdFontFamily::Style style = EpdFontFamily::REGULAR;
     int indent = 0;
     std::vector<std::string> wrapped;
@@ -294,7 +314,7 @@ size_t DashboardActivity::layoutPage(const size_t byteOffset, const bool draw, c
       case DashboardBlockType::Heading1:
       case DashboardBlockType::Heading2: {
         const bool isH1 = block.type == DashboardBlockType::Heading1;
-        fontId = isH1 ? HEADING1_FONT : BODY_FONT;
+        fontId = isH1 ? headingFont : bodyFont;
         style = EpdFontFamily::BOLD;
         wrapped = renderer.wrappedText(fontId, block.text.c_str(), body.width, MAX_WRAPPED_LINES, style);
         blockHeight = static_cast<int>(wrapped.size()) * (isH1 ? headingLineHeight : bodyLineHeight);

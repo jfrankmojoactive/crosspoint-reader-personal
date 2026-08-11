@@ -337,6 +337,12 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
             StrId::STR_DASHBOARD_CLIENTS_URL, [] { return DASHBOARD_STORE.getClientsUrl(); },
             [](const std::string& v) { DASHBOARD_STORE.setClientsUrl(v); }, "dashboardClientsUrl",
             StrId::STR_DASHBOARD),
+        SettingInfo::DynamicEnum(
+            StrId::STR_DASHBOARD_FONT_SIZE,
+            {StrId::STR_DASHBOARD_FONT_SMALL, StrId::STR_DASHBOARD_FONT_MEDIUM, StrId::STR_DASHBOARD_FONT_LARGE,
+             StrId::STR_DASHBOARD_FONT_XLARGE},
+            [] { return DASHBOARD_STORE.getFontSize(); }, [](const uint8_t v) { DASHBOARD_STORE.setFontSize(v); },
+            "dashboardFontSize", StrId::STR_DASHBOARD),
 
         // --- KOReader Sync (web-only, uses KOReaderCredentialStore) ---
         SettingInfo::DynamicString(

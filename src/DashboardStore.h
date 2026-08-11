@@ -2,6 +2,7 @@
 #include <ArduinoJson.h>
 #include <PersistableStore.h>
 
+#include <cstdint>
 #include <string>
 
 /**
@@ -17,6 +18,7 @@ class DashboardStore : public PersistableStore<DashboardStore> {
  private:
   std::string url;
   std::string clientsUrl;
+  uint8_t fontSize = 1;  // Index into FONT_SIZE_COUNT; 1 ("Medium") reads well at arm's length.
 
   DashboardStore() = default;
 
@@ -34,6 +36,9 @@ class DashboardStore : public PersistableStore<DashboardStore> {
   void toJson(JsonDocument& doc) const;
   bool fromJson(JsonVariantConst doc);
 
+  // Number of selectable sizes; the activity maps the index to a font pair.
+  static constexpr uint8_t FONT_SIZE_COUNT = 4;
+
   const std::string& getUrl() const { return url; }
   const std::string& getClientsUrl() const { return clientsUrl; }
   // The priorities page alone is a usable screen; the clients page is optional.
@@ -44,6 +49,11 @@ class DashboardStore : public PersistableStore<DashboardStore> {
   // clears the field.
   bool setUrl(const std::string& newUrl);
   bool setClientsUrl(const std::string& newUrl);
+
+  uint8_t getFontSize() const { return fontSize; }
+  // Out-of-range values are clamped rather than rejected: the web API hands us
+  // whatever index the page sent.
+  bool setFontSize(uint8_t size);
 };
 
 #define DASHBOARD_STORE DashboardStore::getInstance()

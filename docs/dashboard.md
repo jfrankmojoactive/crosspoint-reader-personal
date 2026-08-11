@@ -33,6 +33,9 @@ Everything else is a few lines in the home menu, the settings list, and
    - **Priorities URL** — required. Also settable on-device via
      **Settings → Priorities URL** if you would rather use the keyboard.
    - **Clients URL** — optional, web only. Leave empty to show priorities alone.
+   - **Font Size** — Small / Medium / Large / Extra Large, web only. Medium is
+     the default; Small is the original pairing. Larger sizes fit less on a
+     screen, so a client section may spill onto a second screen.
 
    A URL without a scheme is stored as `https://`. Anything that is not an
    http(s) URL is rejected and the previous value is kept — note the web page
@@ -112,8 +115,10 @@ key/value row.
 - **32 screens max**, so ~30 clients after the priorities screens.
 - **Long values wrap** under their label rather than being truncated, so keep
   stat values short — `12`, `3 open`, `2h 15m`.
-- **Monochrome, ~800×480.** No images, no colour, no layout control beyond the
-  block types above.
+- **Monochrome, ~800×480**, inset by the theme's content padding. No images, no
+  colour, no layout control beyond the block types above.
+- **Screen count moves with font size.** Raising the size re-paginates, so the
+  `3/8` counter and where sections break both change.
 
 ## Behaviour when things go wrong
 

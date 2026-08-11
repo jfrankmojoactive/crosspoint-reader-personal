@@ -43,6 +43,9 @@ class DashboardActivity final : public Activity {
   static constexpr const char* CACHE_PATH = "/.crosspoint/dashboard.md";
 
   ButtonNavigator buttonNavigator;
+  // Resolved from DashboardStore's font-size index in onEnter().
+  int bodyFont = 0;
+  int headingFont = 0;
   State state = State::CheckWifi;
   std::string content;
   // Byte offset into `content` of the first line of each page.
