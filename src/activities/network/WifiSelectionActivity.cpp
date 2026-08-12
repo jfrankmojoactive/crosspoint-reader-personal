@@ -173,8 +173,19 @@ void WifiSelectionActivity::processWifiScanResults() {
     return;
   }
 
-  autoConnecting = false;
   manualNetworkListRequested = false;
+  giveUpAutoConnect();
+}
+
+void WifiSelectionActivity::giveUpAutoConnect() {
+  autoConnecting = false;
+  if (autoConnectOnly) {
+    // The caller can carry on without a network; hand back a cancellation
+    // rather than parking the user on a network list they never asked for.
+    LOG_DBG("WIFI", "Auto-connect exhausted; returning without a network");
+    onComplete(false);
+    return;
+  }
   state = WifiSelectionState::NETWORK_LIST;
   selectedNetworkIndex = 0;
   requestUpdate();
@@ -317,10 +328,7 @@ void WifiSelectionActivity::handleAutoConnectFailure() {
     if (tryNextSavedNetworkFromScan()) {
       return;
     }
-    autoConnecting = false;
-    state = WifiSelectionState::NETWORK_LIST;
-    selectedNetworkIndex = 0;
-    requestUpdate();
+    giveUpAutoConnect();
     return;
   }
 

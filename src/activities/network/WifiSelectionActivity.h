@@ -78,6 +78,9 @@ class WifiSelectionActivity final : public Activity {
 
   // Whether we are attempting to auto-connect or auto-scan saved networks.
   bool autoConnecting = false;
+  const bool autoConnectOnly = false;
+  // Shared exit for the two points where auto-connect runs out of options.
+  void giveUpAutoConnect();
 
   // True when the user stopped auto-connect and asked to see the scan result.
   bool manualNetworkListRequested = false;
@@ -120,8 +123,15 @@ class WifiSelectionActivity final : public Activity {
   void onComplete(bool connected);
 
  public:
-  explicit WifiSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool autoConnect = true)
-      : Activity("WifiSelection", renderer, mappedInput), allowAutoConnect(autoConnect) {}
+  // autoConnectOnly: when the saved networks are exhausted, finish with a
+  // cancelled result instead of showing the manual picker. For callers that
+  // have something to display without a network (e.g. a cached page) and
+  // should not interrupt the user with a network list they did not ask for.
+  explicit WifiSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool autoConnect = true,
+                                 bool autoConnectOnly = false)
+      : Activity("WifiSelection", renderer, mappedInput),
+        allowAutoConnect(autoConnect),
+        autoConnectOnly(autoConnectOnly) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

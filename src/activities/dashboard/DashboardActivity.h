@@ -55,6 +55,9 @@ class DashboardActivity final : public Activity {
   bool clientsFetchFailed = false;
   bool contentTruncated = false;
   bool fetchStarted = false;
+  // True while handling a user-initiated refresh, which may show the Wi-Fi
+  // picker; entering the screen never does when a cached copy exists.
+  bool interactiveWifi = false;
   const char* errorMessage = nullptr;
 
   void checkAndConnectWifi();

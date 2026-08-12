@@ -61,6 +61,7 @@ void DashboardActivity::onEnter() {
   // Show the cached copy immediately if the fetch fails; loading it up front
   // costs one SD read and removes the "error screen with nothing on it" case.
   loadCachedContent();
+  interactiveWifi = false;
   state = State::CheckWifi;
   requestUpdate();
 }
@@ -102,7 +103,11 @@ void DashboardActivity::loop() {
   // button press away from a retry.
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (state == State::NoUrl) return;
-    startFetch();
+    // Asking for fresh data is a request to get online: if the saved networks
+    // do not come up, show the picker rather than silently re-showing the cache.
+    interactiveWifi = true;
+    state = State::CheckWifi;
+    requestUpdate();
     return;
   }
 
@@ -131,7 +136,12 @@ void DashboardActivity::checkAndConnectWifi() {
 
 void DashboardActivity::launchWifiSelection() {
   state = State::WifiSelection;
-  startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
+  // Opening the screen should never dump the user into a network picker they
+  // did not ask for when there is a cached copy to read: try the saved networks
+  // silently and fall back to the cache. An explicit refresh, or having nothing
+  // cached to show, earns the full picker.
+  const bool autoConnectOnly = !interactiveWifi && !content.empty();
+  startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput, true, autoConnectOnly),
                          [this](const ActivityResult& result) { onWifiSelectionComplete(!result.isCancelled); });
 }
 

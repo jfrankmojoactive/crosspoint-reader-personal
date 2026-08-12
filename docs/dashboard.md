@@ -120,6 +120,22 @@ key/value row.
 - **Screen count moves with font size.** Raising the size re-paginates, so the
   `3/8` counter and where sections break both change.
 
+## Offline behaviour
+
+Opening the screen always reads the cached copy from the SD card first, then
+tries to refresh it:
+
+| On open | What happens |
+|---|---|
+| Already on Wi-Fi | Fetches both documents and replaces the cache |
+| Not connected, a saved network in range | Joins it silently, then fetches |
+| Not connected, no saved network reachable | Shows the cached copy marked `offline copy` — **no Wi-Fi picker** |
+| Not connected and nothing cached | Shows the Wi-Fi picker, since there is nothing else to display |
+
+Pressing Confirm is an explicit "get me fresh data", so on that path the picker
+*is* shown when the saved networks do not come up — that is the way to join a
+new network from this screen.
+
 ## Behaviour when things go wrong
 
 Both documents are cached, concatenated, to `/.crosspoint/dashboard.md`. If the
