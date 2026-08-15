@@ -52,7 +52,20 @@ void DashboardActivity::onEnter() {
   const FontPair& fonts = FONT_PAIRS[DASHBOARD_STORE.getFontSize() % DashboardStore::FONT_SIZE_COUNT];
   bodyFont = fonts.body;
   headingFont = fonts.heading;
-  if (!DASHBOARD_STORE.isConfigured()) {
+
+  // One cache file per section replaced the single combined file; drop the old
+  // one so it does not linger on the card.
+  if (Storage.exists(LEGACY_CACHE_PATH)) Storage.remove(LEGACY_CACHE_PATH);
+
+  for (uint8_t i = 0; i < DashboardStore::SECTION_COUNT; ++i) {
+    sections[i] = SectionState{};
+    sections[i].configured = !DASHBOARD_STORE.getSectionUrl(i).empty();
+    sections[i].cached = Storage.exists(cachePathFor(i));
+  }
+
+  activeSection = firstConfiguredSection();
+  if (activeSection >= DashboardStore::SECTION_COUNT) {
+    activeSection = SectionId::Priorities;
     state = State::NoUrl;
     requestUpdate();
     return;
@@ -60,7 +73,7 @@ void DashboardActivity::onEnter() {
 
   // Show the cached copy immediately if the fetch fails; loading it up front
   // costs one SD read and removes the "error screen with nothing on it" case.
-  loadCachedContent();
+  showSection(activeSection);
   interactiveWifi = false;
   state = State::CheckWifi;
   requestUpdate();
@@ -72,6 +85,67 @@ void DashboardActivity::onExit() {
   pageOffsets.clear();
   pageOffsets.shrink_to_fit();
   Activity::onExit();
+}
+
+const char* DashboardActivity::cachePathFor(const uint8_t section) {
+  switch (section) {
+    case SectionId::Clients:
+      return "/.crosspoint/dashboard-clients.md";
+    case SectionId::News:
+      return "/.crosspoint/dashboard-news.md";
+    case SectionId::Priorities:
+    default:
+      return "/.crosspoint/dashboard-priorities.md";
+  }
+}
+
+const char* DashboardActivity::tabLabelFor(const uint8_t section) {
+  switch (section) {
+    case SectionId::Clients:
+      return tr(STR_DASHBOARD_TAB_CLIENTS);
+    case SectionId::News:
+      return tr(STR_DASHBOARD_TAB_NEWS);
+    case SectionId::Priorities:
+    default:
+      return tr(STR_DASHBOARD_TAB_PRIORITIES);
+  }
+}
+
+uint8_t DashboardActivity::firstConfiguredSection() const {
+  for (uint8_t i = 0; i < DashboardStore::SECTION_COUNT; ++i) {
+    if (sections[i].configured) return i;
+  }
+  return DashboardStore::SECTION_COUNT;
+}
+
+bool DashboardActivity::anySectionCached() const {
+  for (uint8_t i = 0; i < DashboardStore::SECTION_COUNT; ++i) {
+    if (sections[i].configured && sections[i].cached) return true;
+  }
+  return false;
+}
+
+void DashboardActivity::stepSection(const int delta) {
+  // Walk in `delta` direction until the next configured section; the loop is
+  // bounded by SECTION_COUNT, so an unconfigured neighbour is simply skipped.
+  for (uint8_t step = 1; step < DashboardStore::SECTION_COUNT; ++step) {
+    const int raw = static_cast<int>(activeSection) + delta * static_cast<int>(step);
+    const uint8_t candidate =
+        static_cast<uint8_t>(((raw % DashboardStore::SECTION_COUNT) + DashboardStore::SECTION_COUNT) %
+                             DashboardStore::SECTION_COUNT);
+    if (!sections[candidate].configured) continue;
+    activeSection = candidate;
+    currentPage = 0;
+    if (!showSection(candidate)) {
+      // Configured but never fetched: leave the body empty and let render()
+      // report it rather than silently showing the previous section's text.
+      content.clear();
+      pageOffsets.clear();
+    }
+    state = State::Viewing;
+    requestUpdate();
+    return;
+  }
 }
 
 void DashboardActivity::loop() {
@@ -86,7 +160,7 @@ void DashboardActivity::loop() {
       // Paint "Loading..." before the blocking fetch, or the screen sits on the
       // previous frame for the whole request.
       requestUpdateAndWait();
-      fetchContent();
+      fetchAllSections();
       requestUpdate();
     }
     return;
@@ -111,7 +185,19 @@ void DashboardActivity::loop() {
     return;
   }
 
-  if (state != State::Viewing || pageOffsets.size() <= 1) return;
+  if (state != State::Viewing) return;
+
+  // Left/Right change section, mirroring the Settings tab bar.
+  if (mappedInput.wasReleased(MappedInputManager::Button::ScreenRight)) {
+    stepSection(1);
+    return;
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::ScreenLeft)) {
+    stepSection(-1);
+    return;
+  }
+
+  if (pageOffsets.size() <= 1) return;
 
   buttonNavigator.onNext([this] {
     if (currentPage + 1 >= pageOffsets.size()) return;
@@ -140,7 +226,7 @@ void DashboardActivity::launchWifiSelection() {
   // did not ask for when there is a cached copy to read: try the saved networks
   // silently and fall back to the cache. An explicit refresh, or having nothing
   // cached to show, earns the full picker.
-  const bool autoConnectOnly = !interactiveWifi && !content.empty();
+  const bool autoConnectOnly = !interactiveWifi && anySectionCached();
   startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput, true, autoConnectOnly),
                          [this](const ActivityResult& result) { onWifiSelectionComplete(!result.isCancelled); });
 }
@@ -151,9 +237,7 @@ void DashboardActivity::onWifiSelectionComplete(const bool connected) {
     return;
   }
   // No network: fall back to whatever the SD card still holds.
-  if (!content.empty()) {
-    contentFromCache = true;
-    paginate();
+  if (showSection(activeSection)) {
     state = State::Viewing;
   } else {
     errorMessage = tr(STR_DASHBOARD_NO_WIFI);
@@ -169,14 +253,17 @@ void DashboardActivity::startFetch() {
   requestUpdate();
 }
 
-bool DashboardActivity::appendDocument(const std::string& url, std::string& body, bool& hitCap) const {
-  if (url.empty()) return true;  // Optional document: nothing to fetch is not a failure
+bool DashboardActivity::fetchSection(const uint8_t section) {
+  const std::string& url = DASHBOARD_STORE.getSectionUrl(section);
+  if (url.empty()) return true;  // Not configured: nothing to fetch is not a failure
 
-  // Every document starts a screen, so a blank line before the next one keeps
-  // its first heading from being treated as a continuation of the previous.
-  if (!body.empty() && body.back() != '\n') body.push_back('\n');
+  std::string body;
+  // One allocation covering a typical page: append-driven doubling would
+  // otherwise realloc-and-copy several times mid-fetch, fragmenting DRAM.
+  body.reserve(4096);
+  bool hitCap = false;
 
-  return HttpDownloader::fetchUrl(url, [&body, &hitCap](const uint8_t* data, const size_t len) {
+  const bool ok = HttpDownloader::fetchUrl(url, [&body, &hitCap](const uint8_t* data, const size_t len) {
     const size_t room = DashboardActivity::MAX_CONTENT_BYTES - body.size();
     if (room == 0) {
       // Stop the transfer: the rest of the page can never be displayed.
@@ -186,55 +273,60 @@ bool DashboardActivity::appendDocument(const std::string& url, std::string& body
     body.append(reinterpret_cast<const char*>(data), std::min(len, room));
     return true;
   });
-}
-
-void DashboardActivity::fetchContent() {
-  const std::string& url = DASHBOARD_STORE.getUrl();
-  const std::string& clientsUrl = DASHBOARD_STORE.getClientsUrl();
-  std::string body;
-  // One allocation covering a typical page: append-driven doubling would
-  // otherwise realloc-and-copy several times mid-fetch, fragmenting DRAM.
-  body.reserve(4096);
-  bool hitCap = false;
-  clientsFetchFailed = false;
-
-  // Priorities first, then the client summaries: the reading order IS the
-  // screen order. A clients page that fails leaves the priorities usable, so
-  // only a failed priorities fetch counts as a failure worth falling back for.
-  const bool ok = appendDocument(url, body, hitCap);
-  if (ok && !hitCap && !clientsUrl.empty() && !appendDocument(clientsUrl, body, hitCap)) {
-    LOG_ERR("DASH", "Clients fetch failed: %s", clientsUrl.c_str());
-    clientsFetchFailed = true;
-  }
 
   // Aborting at the cap surfaces as a failed fetch, but the bytes we kept are
   // a perfectly good (if clipped) page.
-  if (ok || hitCap) {
-    content = std::move(body);
-    contentFromCache = false;
-    contentTruncated = hitCap;
-    saveCachedContent();
-    paginate();
-    state = pageOffsets.empty() ? State::Error : State::Viewing;
-    if (pageOffsets.empty()) errorMessage = tr(STR_DASHBOARD_EMPTY);
-    return;
+  if (!ok && !hitCap) {
+    LOG_ERR("DASH", "Fetch failed: %s", url.c_str());
+    return false;
   }
+  if (body.empty()) return false;
 
-  LOG_ERR("DASH", "Fetch failed: %s", url.c_str());
-  if (!content.empty()) {
-    // Keep showing the cached copy rather than replacing it with an error.
-    contentFromCache = true;
-    paginate();
-    state = State::Viewing;
-    return;
+  Storage.ensureDirectoryExists("/.crosspoint");  // Takes a directory, not the file path
+  HalFile file;
+  if (!Storage.openFileForWrite("DASH", cachePathFor(section), file)) {
+    LOG_ERR("DASH", "Could not cache section %u", static_cast<unsigned>(section));
+    return false;
   }
-  errorMessage = tr(STR_DASHBOARD_FAILED);
-  state = State::Error;
+  file.write(reinterpret_cast<const uint8_t*>(body.data()), body.size());
+
+  sections[section].fetched = true;
+  sections[section].cached = true;
+  sections[section].truncated = hitCap;
+  return true;
 }
 
-bool DashboardActivity::loadCachedContent() {
+void DashboardActivity::fetchAllSections() {
+  // Each section streams into its own cache file, so only one document is ever
+  // resident: three sections cost the same memory as one.
+  for (uint8_t i = 0; i < DashboardStore::SECTION_COUNT; ++i) {
+    if (sections[i].configured) fetchSection(i);
+  }
+
+  // A section that failed keeps whatever it had cached, so prefer showing the
+  // active one; only fall back to another section when it has nothing at all.
+  if (!showSection(activeSection)) {
+    const uint8_t fallback = firstConfiguredSection();
+    if (fallback < DashboardStore::SECTION_COUNT && fallback != activeSection && showSection(fallback)) {
+      activeSection = fallback;
+    }
+  }
+
+  if (pageOffsets.empty()) {
+    errorMessage = sections[activeSection].cached ? tr(STR_DASHBOARD_EMPTY) : tr(STR_DASHBOARD_FAILED);
+    state = State::Error;
+    return;
+  }
+  state = State::Viewing;
+}
+
+bool DashboardActivity::showSection(const uint8_t section) {
+  content.clear();
+  pageOffsets.clear();
+  if (section >= DashboardStore::SECTION_COUNT) return false;
+
   HalFile file;
-  if (!Storage.openFileForRead("DASH", CACHE_PATH, file) || !file) return false;
+  if (!Storage.openFileForRead("DASH", cachePathFor(section), file) || !file) return false;
 
   const size_t size = std::min(static_cast<size_t>(file.fileSize()), MAX_CONTENT_BYTES);
   if (size == 0) return false;
@@ -246,26 +338,26 @@ bool DashboardActivity::loadCachedContent() {
     return false;
   }
   content.resize(static_cast<size_t>(read));
-  contentFromCache = true;
+  sections[section].cached = true;
+  if (currentPage >= MAX_PAGES) currentPage = 0;
   paginate();
-  return true;
+  return !pageOffsets.empty();
 }
 
-void DashboardActivity::saveCachedContent() const {
-  if (content.empty()) return;
-  Storage.ensureDirectoryExists("/.crosspoint");  // Takes a directory, not the file path
-  HalFile file;
-  if (!Storage.openFileForWrite("DASH", CACHE_PATH, file)) {
-    LOG_ERR("DASH", "Could not cache dashboard");
-    return;
+int DashboardActivity::tabBarHeight() const {
+  // A single configured section needs no tab bar, and the row of tabs would
+  // just cost a line of text.
+  int configured = 0;
+  for (uint8_t i = 0; i < DashboardStore::SECTION_COUNT; ++i) {
+    if (sections[i].configured) ++configured;
   }
-  file.write(reinterpret_cast<const uint8_t*>(content.data()), content.size());
+  return configured > 1 ? UITheme::getInstance().getMetrics().tabBarHeight : 0;
 }
 
 Rect DashboardActivity::getBodyRect() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true);
-  const int top = safe.y + metrics.headerHeight + metrics.verticalSpacing;
+  const int top = safe.y + metrics.headerHeight + tabBarHeight() + metrics.verticalSpacing;
   // Inset the text the way every other content screen does: the bezel-safe area
   // alone runs glyphs right up to the edges, which is unreadable on the X3.
   const int pad = metrics.contentSidePadding;
@@ -425,6 +517,18 @@ void DashboardActivity::render(RenderLock&&) {
 
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_DASHBOARD));
 
+  // Tab bar for the configured sections, same component the Settings screen
+  // uses for its categories.
+  const int tabHeight = tabBarHeight();
+  if (tabHeight > 0) {
+    std::vector<TabInfo> tabs;
+    tabs.reserve(DashboardStore::SECTION_COUNT);
+    for (uint8_t i = 0; i < DashboardStore::SECTION_COUNT; ++i) {
+      if (sections[i].configured) tabs.push_back(TabInfo{tabLabelFor(i), i == activeSection});
+    }
+    GUI.drawTabBar(renderer, Rect{0, metrics.topPadding + metrics.headerHeight, pageWidth, tabHeight}, tabs, true);
+  }
+
   const char* centred = nullptr;
   switch (state) {
     case State::NoUrl:
@@ -441,6 +545,9 @@ void DashboardActivity::render(RenderLock&&) {
       centred = errorMessage ? errorMessage : tr(STR_DASHBOARD_FAILED);
       break;
     case State::Viewing:
+      if (pageOffsets.empty()) {
+        centred = sections[activeSection].cached ? tr(STR_DASHBOARD_EMPTY) : tr(STR_DASHBOARD_SECTION_FAILED);
+      }
       break;
   }
 
@@ -456,14 +563,13 @@ void DashboardActivity::render(RenderLock&&) {
       snprintf(status, sizeof(status), "%u/%u", static_cast<unsigned>(currentPage + 1),
                static_cast<unsigned>(pageOffsets.size()));
     }
+    // Status is per section: one stale section does not make the others stale.
+    const SectionState& active = sections[activeSection];
     const char* note = "";
-    if (contentFromCache) {
+    if (!active.fetched) {
       note = tr(STR_DASHBOARD_OFFLINE);
-    } else if (contentTruncated) {
+    } else if (active.truncated) {
       note = tr(STR_DASHBOARD_CLIPPED);
-    } else if (clientsFetchFailed) {
-      // The priorities screens are intact; say so rather than showing nothing.
-      note = tr(STR_DASHBOARD_CLIENTS_FAILED);
     }
     if (note[0] != '\0') {
       const int noteWidth = renderer.getTextWidth(SMALL_FONT_ID, note);
@@ -475,8 +581,14 @@ void DashboardActivity::render(RenderLock&&) {
   }
 
   const bool paged = state == State::Viewing && pageOffsets.size() > 1;
+  const bool tabbed = tabHeight > 0 && state == State::Viewing;
+  // Front Left/Right walk the tabs; the side buttons page within a section, so
+  // each pair is hinted where its buttons actually are.
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), state == State::NoUrl ? "" : tr(STR_REFRESH),
-                                            paged ? tr(STR_DIR_UP) : "", paged ? tr(STR_DIR_DOWN) : "");
+                                            tabbed ? tr(STR_DIR_LEFT) : "", tabbed ? tr(STR_DIR_RIGHT) : "");
+  if (paged) {
+    GUI.drawSideButtonHints(renderer, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  }
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderer.displayBuffer();

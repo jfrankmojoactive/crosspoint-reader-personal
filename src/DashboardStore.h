@@ -7,9 +7,10 @@
 
 /**
  * Stores the URLs of the MoJo Active pages published by an external tool (see
- * docs/dashboard.md). Two documents, fetched in order and shown as one
- * front-to-back sequence of screens: `url` holds the priorities page, and the
- * optional `clientsUrl` holds the per-client summaries.
+ * docs/dashboard.md). Three documents, each shown as its own tabbed section:
+ * `url` holds the priorities page, `clientsUrl` the per-client summaries, and
+ * `newsUrl` the client-relevant news. Only the priorities page is required; a
+ * section with no URL has no tab.
  *
  * Public HTTPS URLs only — no credentials are kept here, so a URL itself is the
  * secret. Keep them unguessable.
@@ -18,6 +19,7 @@ class DashboardStore : public PersistableStore<DashboardStore> {
  private:
   std::string url;
   std::string clientsUrl;
+  std::string newsUrl;
   uint8_t fontSize = 1;  // Index into FONT_SIZE_COUNT; 1 ("Medium") reads well at arm's length.
 
   DashboardStore() = default;
@@ -41,6 +43,13 @@ class DashboardStore : public PersistableStore<DashboardStore> {
 
   const std::string& getUrl() const { return url; }
   const std::string& getClientsUrl() const { return clientsUrl; }
+  const std::string& getNewsUrl() const { return newsUrl; }
+
+  // Section-indexed access, so the activity can loop over sections instead of
+  // repeating a three-way switch. Index order matches SectionId in
+  // DashboardActivity; out-of-range returns the empty string.
+  static constexpr uint8_t SECTION_COUNT = 3;
+  const std::string& getSectionUrl(uint8_t section) const;
   // The priorities page alone is a usable screen; the clients page is optional.
   bool isConfigured() const { return !url.empty(); }
 
@@ -49,6 +58,7 @@ class DashboardStore : public PersistableStore<DashboardStore> {
   // clears the field.
   bool setUrl(const std::string& newUrl);
   bool setClientsUrl(const std::string& newUrl);
+  bool setNewsUrl(const std::string& newUrl);
 
   uint8_t getFontSize() const { return fontSize; }
   // Out-of-range values are clamped rather than rejected: the web API hands us

@@ -5,9 +5,11 @@ pure consumer: some other tool (a scheduled Claude Desktop task, a cron job, a
 CI workflow) writes the pages and publishes them at URLs; the reader fetches
 them and draws them.
 
-Two documents make up one front-to-back sequence of screens: a **priorities**
-page first, then an optional **clients** page holding one section per client.
-Paging forward from the last priorities screen lands on the first client.
+Up to three documents, each its own tabbed section: **Priorities**, **Clients**
+(one screen per client), and **News** (client-relevant news). Front Left/Right
+switch sections, the side buttons page within one — the same tab pattern the
+Settings screen uses. Only Priorities is required; a section with no URL has no
+tab, and with a single section configured the tab bar is not drawn at all.
 
 (The code is still named `dashboard` throughout — the store, the activity, the
 cache file, the settings keys. Only the user-facing strings say MoJo Active.)
@@ -19,7 +21,7 @@ screens. It is kept to its own files so upstream merges stay clean:
 |---|---|
 | `src/activities/dashboard/DashboardActivity.*` | The screen: fetch, cache, paginate, draw |
 | `src/util/DashboardMarkdown.*` | Line → block classification (host-tested) |
-| `src/DashboardStore.*` | The two configured URLs, persisted to `/.crosspoint/dashboard.json` |
+| `src/DashboardStore.*` | The three configured URLs, persisted to `/.crosspoint/dashboard.json` |
 
 Everything else is a few lines in the home menu, the settings list, and
 `ActivityManager`.
@@ -32,7 +34,8 @@ Everything else is a few lines in the home menu, the settings list, and
 2. Set the URLs at `http://<device-ip>/settings`, under the *MoJo Active* card:
    - **Priorities URL** — required. Also settable on-device via
      **Settings → Priorities URL** if you would rather use the keyboard.
-   - **Clients URL** — optional, web only. Leave empty to show priorities alone.
+   - **Clients URL** — optional, web only. One `#` section per client.
+   - **News URL** — optional, web only. Client-relevant news.
    - **Font Size** — Small / Medium / Large / Extra Large, web only. Medium is
      the default; Small is the original pairing. Larger sizes fit less on a
      screen, so a client section may spill onto a second screen.
@@ -41,14 +44,16 @@ Everything else is a few lines in the home menu, the settings list, and
    http(s) URL is rejected and the previous value is kept — note the web page
    reports "saved" either way, so reload it to confirm what actually stuck.
 3. **Home → MoJo Active** (first item). It connects Wi-Fi if needed, fetches
-   both documents, and renders.
+   every configured section, and renders the first one.
 
-Buttons: Back returns home, Confirm re-fetches both documents, Up/Down move
-between screens. The corner shows `3/8` when there is more than one screen.
+Buttons: Back returns home, Confirm re-fetches every section, front Left/Right
+change section, the side buttons page within a section. The corner shows `3/8`
+when a section runs to more than one screen.
 
-The two documents are fetched independently. If the clients page fails but
-priorities succeed, the priorities screens still render, marked `clients
-unavailable` in the corner.
+Sections are fetched and cached independently, so one failing does not affect
+the others: a section that could not be refreshed shows its previous copy
+marked `offline copy`, and one that has never been fetched says `section
+unavailable` while the rest stay readable.
 
 ## Screens
 
@@ -107,12 +112,11 @@ key/value row.
 
 ## Limits worth designing around
 
-- **8 KB cap across both documents combined.** Roughly 130 lines. Beyond that
-  the fetch stops and the page is marked `clipped` in the corner — and since
-  clients are fetched second, they are what gets lost. With ~10 clients that is
-  roughly 700 bytes each: a heading and a handful of bullets. Publish a summary,
-  not a data dump.
-- **32 screens max**, so ~30 clients after the priorities screens.
+- **8 KB cap per section**, not shared: each document gets its own budget, and
+  only the section being read is in memory. Roughly 130 lines. Beyond that the
+  fetch stops and that section alone is marked `clipped`. With ~10 clients that
+  is roughly 700 bytes each: a heading and a handful of bullets.
+- **32 screens max per section**, so ~32 clients in the Clients section.
 - **Long values wrap** under their label rather than being truncated, so keep
   stat values short — `12`, `3 open`, `2h 15m`.
 - **Monochrome, ~800×480**, inset by the theme's content padding. No images, no
@@ -129,8 +133,8 @@ tries to refresh it:
 |---|---|
 | Already on Wi-Fi | Fetches both documents and replaces the cache |
 | Not connected, a saved network in range | Joins it silently, then fetches |
-| Not connected, no saved network reachable | Shows the cached copy marked `offline copy` — **no Wi-Fi picker** |
-| Not connected and nothing cached | Shows the Wi-Fi picker, since there is nothing else to display |
+| Not connected, no saved network reachable | Shows the cached sections marked `offline copy` — **no Wi-Fi picker** |
+| Not connected and no section cached | Shows the Wi-Fi picker, since there is nothing else to display |
 
 Pressing Confirm is an explicit "get me fresh data", so on that path the picker
 *is* shown when the saved networks do not come up — that is the way to join a
@@ -138,8 +142,9 @@ new network from this screen.
 
 ## Behaviour when things go wrong
 
-Both documents are cached, concatenated, to `/.crosspoint/dashboard.md`. If the
-priorities fetch fails
+Each section is cached to its own file — `/.crosspoint/dashboard-priorities.md`,
+`-clients.md`, `-news.md`. (The old combined `dashboard.md` is deleted on first
+run.) If a fetch fails
 — no Wi-Fi, server down, bad URL — the last good copy renders with `offline
 copy` in the corner instead of an error screen. An error is only shown when
 there is no cache to fall back on.
@@ -156,6 +161,11 @@ For a scheduled Claude task, something like:
 > Start with `# Priorities`, then a line `Updated: <date time>`. Keep stat
 > values under ~15 characters. No images, no nested lists, no code blocks.
 > Publish it to <priorities URL>.
+>
+> **News page.** Summarise news from the last business day that is relevant to
+> my clients, under 3 KB. Start with `# News`, then one `##` heading per story
+> with a bullet or two of why it matters. Same block types as above. Publish it
+> to <news URL>.
 >
 > **Clients page.** For each client with activity in the last business day,
 > write one section starting with `# <Client Name>` — this is what splits the

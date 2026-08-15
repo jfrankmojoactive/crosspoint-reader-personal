@@ -5,6 +5,7 @@
 void DashboardStore::toJson(JsonDocument& doc) const {
   doc["url"] = url;
   doc["clientsUrl"] = clientsUrl;
+  doc["newsUrl"] = newsUrl;
   doc["fontSize"] = fontSize;
 }
 
@@ -16,6 +17,8 @@ bool DashboardStore::fromJson(const JsonVariantConst doc) {
   // is the correct upgrade, so no resave is needed.
   clientsUrl.assign(doc["clientsUrl"] | "");
   if (clientsUrl.size() > MAX_URL_LENGTH) clientsUrl.clear();
+  newsUrl.assign(doc["newsUrl"] | "");
+  if (newsUrl.size() > MAX_URL_LENGTH) newsUrl.clear();
   fontSize = doc["fontSize"] | static_cast<uint8_t>(1);
   if (fontSize >= FONT_SIZE_COUNT) fontSize = 1;
   return true;
@@ -66,6 +69,28 @@ bool DashboardStore::setClientsUrl(const std::string& newUrl) {
   if (candidate == clientsUrl) return true;
   clientsUrl = std::move(candidate);
   return saveToFile();
+}
+
+bool DashboardStore::setNewsUrl(const std::string& newUrl) {
+  std::string candidate;
+  if (!normalise(newUrl, candidate)) return false;
+  if (candidate == newsUrl) return true;
+  newsUrl = std::move(candidate);
+  return saveToFile();
+}
+
+const std::string& DashboardStore::getSectionUrl(const uint8_t section) const {
+  static const std::string empty;
+  switch (section) {
+    case 0:
+      return url;
+    case 1:
+      return clientsUrl;
+    case 2:
+      return newsUrl;
+    default:
+      return empty;
+  }
 }
 
 bool DashboardStore::setFontSize(const uint8_t size) {

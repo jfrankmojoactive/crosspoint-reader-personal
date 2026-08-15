@@ -337,6 +337,9 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
             StrId::STR_DASHBOARD_CLIENTS_URL, [] { return DASHBOARD_STORE.getClientsUrl(); },
             [](const std::string& v) { DASHBOARD_STORE.setClientsUrl(v); }, "dashboardClientsUrl",
             StrId::STR_DASHBOARD),
+        SettingInfo::DynamicString(
+            StrId::STR_DASHBOARD_NEWS_URL, [] { return DASHBOARD_STORE.getNewsUrl(); },
+            [](const std::string& v) { DASHBOARD_STORE.setNewsUrl(v); }, "dashboardNewsUrl", StrId::STR_DASHBOARD),
         SettingInfo::DynamicEnum(
             StrId::STR_DASHBOARD_FONT_SIZE,
             {StrId::STR_DASHBOARD_FONT_SMALL, StrId::STR_DASHBOARD_FONT_MEDIUM, StrId::STR_DASHBOARD_FONT_LARGE,
