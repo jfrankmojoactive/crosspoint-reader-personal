@@ -160,6 +160,16 @@ void DashboardActivity::stepSection(const int delta) {
 }
 
 void DashboardActivity::loop() {
+  // Reaching any state that renders a usable screen means entry did not crash,
+  // so clear the wake boot-loop guard. Writes once: the counter is then zero,
+  // and Loading/CheckWifi deliberately do not qualify — the fetch path is the
+  // riskiest part of entry and has not finished yet.
+  if (APP_STATE.dashboardActivityLoadCount > 0 &&
+      (state == State::Viewing || state == State::Error || state == State::NoUrl)) {
+    APP_STATE.dashboardActivityLoadCount = 0;
+    APP_STATE.saveToFile();
+  }
+
   if (state == State::CheckWifi) {
     checkAndConnectWifi();
     return;

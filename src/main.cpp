@@ -425,10 +425,17 @@ void setup() {
     // openEpubPath + lastSleepActivity from a prior session.
     activityManager.goHome();
   } else if (APP_STATE.lastSleepActivity == CrossPointState::SLEEP_FROM_DASHBOARD &&
-             DASHBOARD_STORE.isConfigured() && !mappedInputManager.isPressed(MappedInputManager::Button::Back)) {
+             DASHBOARD_STORE.isConfigured() && APP_STATE.dashboardActivityLoadCount == 0 &&
+             !mappedInputManager.isPressed(MappedInputManager::Button::Back)) {
     // Slept from MoJo Active: go straight back to it, at the tab and page it
     // was on. Back held at wake still escapes to home, the same hatch the
     // reader resume below offers.
+    //
+    // Record the attempt before entering, exactly as the reader path does: if
+    // the screen crashes before it clears the counter, the next wake sees a
+    // non-zero count and lands on home instead of looping back into the crash.
+    APP_STATE.dashboardActivityLoadCount++;
+    APP_STATE.saveToFile();
     activityManager.goToDashboard();
   } else if (APP_STATE.openEpubPath.empty() || !APP_STATE.lastSleepWasReader() ||
              mappedInputManager.isPressed(MappedInputManager::Button::Back) || APP_STATE.readerActivityLoadCount > 0) {

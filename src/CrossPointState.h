@@ -37,6 +37,11 @@ class CrossPointState : public PersistableStore<CrossPointState> {
   // persists it, so a tab switch or page turn costs no SPIFFS write of its own.
   uint8_t dashboardSection = 0;
   uint8_t dashboardPage = 0;
+  // Boot-loop guard for the wake-into-dashboard path, mirroring
+  // readerActivityLoadCount: bumped before entering, cleared by the activity
+  // once it reaches a stable screen. Non-zero at wake means the last attempt
+  // did not get that far, so route to home instead of retrying forever.
+  uint8_t dashboardActivityLoadCount = 0;
 
   bool showBootScreen = true;
 

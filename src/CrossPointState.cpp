@@ -30,6 +30,7 @@ void CrossPointState::toJson(JsonDocument& doc) const {
   doc["lastSleepActivity"] = lastSleepActivity;
   doc["dashboardSection"] = dashboardSection;
   doc["dashboardPage"] = dashboardPage;
+  doc["dashboardActivityLoadCount"] = dashboardActivityLoadCount;
   doc["showBootScreen"] = showBootScreen;
 }
 
@@ -60,6 +61,7 @@ bool CrossPointState::fromJson(JsonVariantConst doc) {
   }
   dashboardSection = doc["dashboardSection"] | static_cast<uint8_t>(0);
   dashboardPage = doc["dashboardPage"] | static_cast<uint8_t>(0);
+  dashboardActivityLoadCount = doc["dashboardActivityLoadCount"] | static_cast<uint8_t>(0);
   showBootScreen = doc["showBootScreen"] | true;
   return true;
 }
