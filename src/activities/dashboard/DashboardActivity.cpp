@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <string_view>
 
+#include "CrossPointState.h"
 #include "DashboardStore.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
@@ -63,7 +64,12 @@ void DashboardActivity::onEnter() {
     sections[i].cached = Storage.exists(cachePathFor(i));
   }
 
-  activeSection = firstConfiguredSection();
+  // Prefer the section we were last on, so waking resumes the same tab; fall
+  // back to the first configured one when that section has since been cleared.
+  activeSection = APP_STATE.dashboardSection < DashboardStore::SECTION_COUNT &&
+                          sections[APP_STATE.dashboardSection].configured
+                      ? APP_STATE.dashboardSection
+                      : firstConfiguredSection();
   if (activeSection >= DashboardStore::SECTION_COUNT) {
     activeSection = SectionId::Priorities;
     state = State::NoUrl;
@@ -74,6 +80,9 @@ void DashboardActivity::onEnter() {
   // Show the cached copy immediately if the fetch fails; loading it up front
   // costs one SD read and removes the "error screen with nothing on it" case.
   showSection(activeSection);
+  // Best-effort page restore: the document may have been republished since, and
+  // a font-size change re-paginates, so clamp rather than trust the index.
+  currentPage = pageOffsets.empty() ? 0 : std::min(static_cast<size_t>(APP_STATE.dashboardPage), pageOffsets.size() - 1);
   interactiveWifi = false;
   state = State::CheckWifi;
   requestUpdate();
@@ -136,6 +145,8 @@ void DashboardActivity::stepSection(const int delta) {
     if (!sections[candidate].configured) continue;
     activeSection = candidate;
     currentPage = 0;
+    APP_STATE.dashboardSection = activeSection;
+    APP_STATE.dashboardPage = 0;
     if (!showSection(candidate)) {
       // Configured but never fetched: leave the body empty and let render()
       // report it rather than silently showing the previous section's text.
@@ -202,12 +213,14 @@ void DashboardActivity::loop() {
   buttonNavigator.onNext([this] {
     if (currentPage + 1 >= pageOffsets.size()) return;
     ++currentPage;
+    APP_STATE.dashboardPage = static_cast<uint8_t>(currentPage);
     requestUpdate();
   });
 
   buttonNavigator.onPrevious([this] {
     if (currentPage == 0) return;
     --currentPage;
+    APP_STATE.dashboardPage = static_cast<uint8_t>(currentPage);
     requestUpdate();
   });
 }

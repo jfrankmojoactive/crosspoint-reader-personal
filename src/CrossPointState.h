@@ -18,7 +18,26 @@ class CrossPointState : public PersistableStore<CrossPointState> {
   uint8_t recentSleepPos = 0;                           // next write slot
   uint8_t recentSleepFill = 0;                          // valid entries (0..SLEEP_RECENT_COUNT)
   uint8_t readerActivityLoadCount = 0;
-  bool lastSleepFromReader = false;
+
+  // Which screen was on display when the device last slept, so wake can return
+  // to it. Only screens worth resuming are tracked; every other screen records
+  // Home, because waking into a half-finished Settings or network picker is
+  // never what the user meant.
+  enum LAST_SLEEP_ACTIVITY : uint8_t {
+    SLEEP_FROM_HOME = 0,
+    SLEEP_FROM_READER = 1,
+    SLEEP_FROM_DASHBOARD = 2,
+    LAST_SLEEP_ACTIVITY_COUNT
+  };
+  uint8_t lastSleepActivity = SLEEP_FROM_HOME;
+  bool lastSleepWasReader() const { return lastSleepActivity == SLEEP_FROM_READER; }
+
+  // MoJo Active view position, restored on wake. Updated in memory as the user
+  // moves around; the pre-sleep saveToFile() in enterDeepSleep() is what
+  // persists it, so a tab switch or page turn costs no SPIFFS write of its own.
+  uint8_t dashboardSection = 0;
+  uint8_t dashboardPage = 0;
+
   bool showBootScreen = true;
 
   static const char* getFilePath() { return "/.crosspoint/state.json"; }

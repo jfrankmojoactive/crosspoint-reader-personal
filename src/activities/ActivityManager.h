@@ -103,6 +103,9 @@ class ActivityManager {
 
   bool preventAutoSleep() const;
   bool isReaderActivity() const;
+  // Name-based, like goHome()'s routing: avoids adding a fork-specific virtual
+  // to the shared Activity base.
+  bool isDashboardActivity() const;
   bool handleForcedRefresh();
   bool skipLoopDelay() const;
   ScreenshotInfo getScreenshotInfo() const;

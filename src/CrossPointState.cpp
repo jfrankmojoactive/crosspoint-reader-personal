@@ -27,7 +27,9 @@ void CrossPointState::toJson(JsonDocument& doc) const {
   doc["recentSleepPos"] = recentSleepPos;
   doc["recentSleepFill"] = recentSleepFill;
   doc["readerActivityLoadCount"] = readerActivityLoadCount;
-  doc["lastSleepFromReader"] = lastSleepFromReader;
+  doc["lastSleepActivity"] = lastSleepActivity;
+  doc["dashboardSection"] = dashboardSection;
+  doc["dashboardPage"] = dashboardPage;
   doc["showBootScreen"] = showBootScreen;
 }
 
@@ -49,7 +51,15 @@ bool CrossPointState::fromJson(JsonVariantConst doc) {
     if (legacy != UINT8_MAX) pushRecentSleep(static_cast<uint16_t>(legacy));
   }
   readerActivityLoadCount = doc["readerActivityLoadCount"] | static_cast<uint8_t>(0);
-  lastSleepFromReader = doc["lastSleepFromReader"] | false;
+  lastSleepActivity = doc["lastSleepActivity"] | static_cast<uint8_t>(SLEEP_FROM_HOME);
+  if (lastSleepActivity >= LAST_SLEEP_ACTIVITY_COUNT) lastSleepActivity = SLEEP_FROM_HOME;
+  // Migrate the legacy boolean from state.json written before other screens
+  // could be resumed. Only consulted when the new key is absent.
+  if (doc["lastSleepActivity"].isNull() && (doc["lastSleepFromReader"] | false)) {
+    lastSleepActivity = SLEEP_FROM_READER;
+  }
+  dashboardSection = doc["dashboardSection"] | static_cast<uint8_t>(0);
+  dashboardPage = doc["dashboardPage"] | static_cast<uint8_t>(0);
   showBootScreen = doc["showBootScreen"] | true;
   return true;
 }

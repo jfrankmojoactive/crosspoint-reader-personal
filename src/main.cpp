@@ -195,7 +195,9 @@ static bool loadSleepFrameBuffer() {
 // Enter deep sleep mode
 void enterDeepSleep(bool fromTimeout = false) {
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
-  APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
+  APP_STATE.lastSleepActivity = activityManager.isReaderActivity()      ? CrossPointState::SLEEP_FROM_READER
+                                : activityManager.isDashboardActivity() ? CrossPointState::SLEEP_FROM_DASHBOARD
+                                                                        : CrossPointState::SLEEP_FROM_HOME;
 
   const bool isQuickResumeSleep =
       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
@@ -420,9 +422,15 @@ void setup() {
   } else if (resume == BootResume::Silent) {
     // target == home (or reader with no open book): land on home — don't fall
     // through to the sleep-wake "resume reader" logic, which fires on stale
-    // openEpubPath + lastSleepFromReader from a prior session.
+    // openEpubPath + lastSleepActivity from a prior session.
     activityManager.goHome();
-  } else if (APP_STATE.openEpubPath.empty() || !APP_STATE.lastSleepFromReader ||
+  } else if (APP_STATE.lastSleepActivity == CrossPointState::SLEEP_FROM_DASHBOARD &&
+             DASHBOARD_STORE.isConfigured() && !mappedInputManager.isPressed(MappedInputManager::Button::Back)) {
+    // Slept from MoJo Active: go straight back to it, at the tab and page it
+    // was on. Back held at wake still escapes to home, the same hatch the
+    // reader resume below offers.
+    activityManager.goToDashboard();
+  } else if (APP_STATE.openEpubPath.empty() || !APP_STATE.lastSleepWasReader() ||
              mappedInputManager.isPressed(MappedInputManager::Button::Back) || APP_STATE.readerActivityLoadCount > 0) {
     // Boot to home screen if no book is open, last sleep was not from reader, back button is held, or reader activity
     // crashed (indicated by readerActivityLoadCount > 0)
